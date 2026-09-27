@@ -15,6 +15,7 @@ struct PointCloudUniforms {
     float maxDepth;
     int gridWidth;
     int gridHeight;
+    int maxPoints;
 };
 
 #endif

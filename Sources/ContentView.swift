@@ -15,6 +15,12 @@ struct ContentView: View {
                     Spacer()
                     Text(String(format: "%.2f m - %.2f m", state.minDepth, state.maxDepth))
                         .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    Button {
+                        state.resetRequested = true
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise.circle.fill")
+                            .font(.system(size: 20))
+                    }
                 }
                 .foregroundColor(.white)
                 .padding(.horizontal, 14)
@@ -61,4 +67,5 @@ final class ScannerState: ObservableObject {
     @Published var maxDepth: Float = 0
     @Published var highConfidenceOnly: Bool = true
     @Published var colorMode: ColorMode = .depth
+    @Published var resetRequested: Bool = false
 }

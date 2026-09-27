@@ -24,6 +24,13 @@ struct ARPointCloudView: UIViewRepresentable {
     func updateUIView(_ uiView: MTKView, context: Context) {
         context.coordinator.renderer?.highConfidenceOnly = state.highConfidenceOnly
         context.coordinator.renderer?.colorMode = state.colorMode
+
+        if state.resetRequested {
+            context.coordinator.renderer?.reset()
+            DispatchQueue.main.async {
+                state.resetRequested = false
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }

@@ -1,4 +1,5 @@
 #include <metal_stdlib>
+#include <metal_atomic>
 #include "ShaderTypes.h"
 using namespace metal;
 
@@ -7,7 +8,8 @@ struct ParticleVertex {
     float4 color;    // couleur précalculée (depth ou confiance) ou rgb caméra
 };
 
-// MARK: - Compute : déprojection de chaque pixel de profondeur en point 3D
+// MARK: - Compute : déprojection de chaque pixel de profondeur en point 3D,
+// ajouté (append) au buffer accumulé partagé plutôt que remplacé chaque frame.
 
 kernel void unprojectDepth(
     texture2d<float, access::read> depthTexture [[texture(0)]],
@@ -16,18 +18,15 @@ kernel void unprojectDepth(
     texture2d<float, access::sample> capturedImageTextureCbCr [[texture(3)]],
     device ParticleVertex *output [[buffer(0)]],
     constant PointCloudUniforms &uniforms [[buffer(1)]],
+    device atomic_uint *pointCounter [[buffer(2)]],
     uint2 gid [[thread_position_in_grid]])
 {
-    if (gid.x >= uniforms.gridWidth || gid.y >= uniforms.gridHeight) { return; }
+    if (gid.x >= uint(uniforms.gridWidth) || gid.y >= uint(uniforms.gridHeight)) { return; }
 
-    uint index = gid.y * uniforms.gridWidth + gid.x;
     float depth = depthTexture.read(gid).r;
     uint confidence = confidenceTexture.read(gid).r;
 
-    if (depth < uniforms.minDepth || depth > uniforms.maxDepth || depth <= 0.0) {
-        output[index].position = float4(0, 0, 0, -1);
-        return;
-    }
+    if (depth < uniforms.minDepth || depth > uniforms.maxDepth || depth <= 0.0) { return; }
 
     // Pixel homogène -> rayon caméra -> point 3D caméra (mètres)
     float3 pixel = float3(float(gid.x), float(gid.y), 1.0);
@@ -48,11 +47,15 @@ kernel void unprojectDepth(
         y + 1.772 * cbcr.x
     );
 
-    output[index].position = float4(worldPoint.xyz, float(confidence));
-    output[index].color = float4(clamp(rgb, 0.0, 1.0), 1.0);
+    // On réserve une place dans le buffer accumulé (append atomique)
+    uint writeIndex = atomic_fetch_add_explicit(pointCounter, 1u, memory_order_relaxed);
+    if (writeIndex >= uint(uniforms.maxPoints)) { return; }
+
+    output[writeIndex].position = float4(worldPoint.xyz, float(confidence));
+    output[writeIndex].color = float4(clamp(rgb, 0.0, 1.0), 1.0);
 }
 
-// MARK: - Rendu du nuage de points
+// MARK: - Rendu du nuage de points accumulé
 
 struct VertexOut {
     float4 clipPosition [[position]];
@@ -62,7 +65,6 @@ struct VertexOut {
 
 float3 depthToColor(float depth, float minDepth, float maxDepth) {
     float t = clamp((depth - minDepth) / max(maxDepth - minDepth, 0.001), 0.0, 1.0);
-    // dégradé bleu -> vert -> rouge (façon "heatmap" LiDAR)
     float3 c1 = float3(0.05, 0.05, 0.9);
     float3 c2 = float3(0.1, 0.9, 0.2);
     float3 c3 = float3(0.95, 0.1, 0.1);
@@ -71,9 +73,9 @@ float3 depthToColor(float depth, float minDepth, float maxDepth) {
 }
 
 float3 confidenceToColor(float confidence) {
-    if (confidence >= 2.0) { return float3(0.15, 1.0, 0.3); }  // haute
-    if (confidence >= 1.0) { return float3(1.0, 0.8, 0.1); }   // moyenne
-    return float3(0.9, 0.15, 0.15);                            // basse
+    if (confidence >= 2.0) { return float3(0.15, 1.0, 0.3); }
+    if (confidence >= 1.0) { return float3(1.0, 0.8, 0.1); }
+    return float3(0.9, 0.15, 0.15);
 }
 
 vertex VertexOut pointCloudVertex(
@@ -85,8 +87,7 @@ vertex VertexOut pointCloudVertex(
     ParticleVertex v = vertices[vertexID];
     float confidence = v.position.w;
 
-    // point invalide -> le pousser hors du frustum
-    if (confidence < 0.0 || (uniforms.highConfidenceOnly != 0 && confidence < 2.0)) {
+    if (uniforms.highConfidenceOnly != 0 && confidence < 2.0) {
         out.clipPosition = float4(0, 0, -10, 1);
         out.color = float4(0);
         out.pointSize = 0.0;
@@ -94,15 +95,15 @@ vertex VertexOut pointCloudVertex(
     }
 
     out.clipPosition = uniforms.viewProjectionMatrix * float4(v.position.xyz, 1.0);
-    out.pointSize = clamp(1800.0 / max(out.clipPosition.w, 0.01), 2.0, 14.0);
+    out.pointSize = clamp(1400.0 / max(out.clipPosition.w, 0.01), 1.2, 6.0);
 
     if (uniforms.colorMode == 1) {
-        out.color = float4(confidenceToColor(confidence), 1.0);
+        out.color = float4(confidenceToColor(confidence), 0.9);
     } else if (uniforms.colorMode == 2) {
-        out.color = v.color;
+        out.color = float4(v.color.rgb, 0.9);
     } else {
         float dist = length(v.position.xyz);
-        out.color = float4(depthToColor(dist, 0.2, 5.0), 1.0);
+        out.color = float4(depthToColor(dist, 0.2, 5.0), 0.9);
     }
     return out;
 }
@@ -110,8 +111,9 @@ vertex VertexOut pointCloudVertex(
 fragment float4 pointCloudFragment(VertexOut in [[stage_in]],
                                     float2 pointCoord [[point_coord]])
 {
-    // rendre les points ronds plutôt que carrés
     float dist = length(pointCoord - float2(0.5));
     if (dist > 0.5) { discard_fragment(); }
-    return in.color;
+    // léger fondu vers les bords du point pour un rendu "scintillant"
+    float edgeFade = 1.0 - smoothstep(0.3, 0.5, dist);
+    return float4(in.color.rgb, in.color.a * edgeFade);
 }
