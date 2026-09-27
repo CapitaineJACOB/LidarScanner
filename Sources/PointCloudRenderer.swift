@@ -18,17 +18,22 @@ final class PointCloudRenderer: NSObject, MTKViewDelegate, ARSessionDelegate {
     private var renderPipeline: MTLRenderPipelineState!
     private var depthStencilState: MTLDepthStencilState!
 
-    // Buffer accumulé : ne grandit plus par frame, on y ajoute des points au fil du temps.
     private let maxPoints = 3_000_000
     private var vertexBuffer: MTLBuffer!
     private var counterBuffer: MTLBuffer!
 
     private var currentPointCount: Int = 0
     private var lastCaptureTime: TimeInterval = 0
-    private let captureInterval: TimeInterval = 0.15 // ~6-7 captures/seconde
+    private let captureInterval: TimeInterval = 0.08 // ~12 captures/seconde pendant l'appui
 
-    var highConfidenceOnly: Bool = true
+    // Réglages pilotés depuis l'UI (SwiftUI)
+    var isCapturing: Bool = false
+    var highConfidenceOnly: Bool = false
     var colorMode: ColorMode = .depth
+    var pointSizeScale: Float = 1.6
+    var fadeEnabled: Bool = true
+    var fadeDurationSeconds: Float = 6.0
+    var shapeMode: PointShape = .dot
 
     private var viewportSize = CGSize(width: 1, height: 1)
     private let inFlightSemaphore = DispatchSemaphore(value: 3)
@@ -61,7 +66,6 @@ final class PointCloudRenderer: NSObject, MTKViewDelegate, ARSessionDelegate {
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
     }
 
-    /// Vide le nuage de points accumulé pour recommencer un scan.
     func reset() {
         let ptr = counterBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)
         ptr.pointee = 0
@@ -88,8 +92,6 @@ final class PointCloudRenderer: NSObject, MTKViewDelegate, ARSessionDelegate {
         pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
         pipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
 
-        // Mélange additif : les points accumulés s'illuminent en se superposant,
-        // ce qui donne le rendu "dense / scintillant" recherché.
         pipelineDescriptor.colorAttachments[0].isBlendingEnabled = true
         pipelineDescriptor.colorAttachments[0].rgbBlendOperation = .add
         pipelineDescriptor.colorAttachments[0].alphaBlendOperation = .add
@@ -100,8 +102,6 @@ final class PointCloudRenderer: NSObject, MTKViewDelegate, ARSessionDelegate {
 
         renderPipeline = try! device.makeRenderPipelineState(descriptor: pipelineDescriptor)
 
-        // Pas de test de profondeur : des points capturés à des instants différents
-        // se chevauchent naturellement, un test de profondeur créerait du clignotement.
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .always
         depthDescriptor.isDepthWriteEnabled = false
@@ -109,7 +109,7 @@ final class PointCloudRenderer: NSObject, MTKViewDelegate, ARSessionDelegate {
     }
 
     private func buildBuffers() {
-        let stride = MemoryLayout<SIMD4<Float>>.stride * 2 // position(float4) + color(float4)
+        let stride = MemoryLayout<SIMD4<Float>>.stride * 2
         vertexBuffer = device.makeBuffer(length: maxPoints * stride, options: .storageModeShared)
 
         counterBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)
@@ -120,6 +120,8 @@ final class PointCloudRenderer: NSObject, MTKViewDelegate, ARSessionDelegate {
     // MARK: - ARSessionDelegate
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        guard isCapturing else { return }
+
         let now = frame.timestamp
         guard now - lastCaptureTime >= captureInterval else { return }
 
@@ -155,6 +157,7 @@ final class PointCloudRenderer: NSObject, MTKViewDelegate, ARSessionDelegate {
         uniforms.gridWidth = Int32(width)
         uniforms.gridHeight = Int32(height)
         uniforms.maxPoints = Int32(maxPoints)
+        uniforms.currentTime = Float(now)
 
         encoder.setComputePipelineState(computePipeline)
         encoder.setTexture(depthTexture, index: 0)
@@ -212,6 +215,10 @@ final class PointCloudRenderer: NSObject, MTKViewDelegate, ARSessionDelegate {
         uniforms.minDepth = 0.15
         uniforms.maxDepth = 6.0
         uniforms.maxPoints = Int32(maxPoints)
+        uniforms.currentTime = Float(frame.timestamp)
+        uniforms.fadeDuration = fadeEnabled ? fadeDurationSeconds : 1_000_000.0
+        uniforms.pointSizeScale = pointSizeScale
+        uniforms.shapeMode = shapeMode == .horizontal ? 1 : 0
 
         renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
@@ -280,10 +287,14 @@ struct PointCloudUniforms {
     var cameraIntrinsicsInversed = matrix_identity_float3x3
     var cameraResolution = SIMD2<Float>(1, 1)
     var colorMode: Int32 = 0
-    var highConfidenceOnly: Int32 = 1
+    var highConfidenceOnly: Int32 = 0
     var minDepth: Float = 0.15
     var maxDepth: Float = 6.0
     var gridWidth: Int32 = 0
     var gridHeight: Int32 = 0
     var maxPoints: Int32 = 0
+    var currentTime: Float = 0
+    var fadeDuration: Float = 6.0
+    var pointSizeScale: Float = 1.6
+    var shapeMode: Int32 = 0
 }

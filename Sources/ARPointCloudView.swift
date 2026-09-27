@@ -22,11 +22,17 @@ struct ARPointCloudView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
-        context.coordinator.renderer?.highConfidenceOnly = state.highConfidenceOnly
-        context.coordinator.renderer?.colorMode = state.colorMode
+        guard let renderer = context.coordinator.renderer else { return }
+        renderer.highConfidenceOnly = state.highConfidenceOnly
+        renderer.colorMode = state.colorMode
+        renderer.isCapturing = state.isCapturing
+        renderer.pointSizeScale = Float(state.pointSizeScale)
+        renderer.fadeEnabled = state.fadeEnabled
+        renderer.fadeDurationSeconds = Float(state.fadeDuration)
+        renderer.shapeMode = state.shapeMode
 
         if state.resetRequested {
-            context.coordinator.renderer?.reset()
+            renderer.reset()
             DispatchQueue.main.async {
                 state.resetRequested = false
             }
