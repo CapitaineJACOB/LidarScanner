@@ -1,0 +1,45 @@
+name: Build LidarScanner IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer XcodeGen
+        run: brew install xcodegen
+
+      - name: Générer le projet Xcode
+        run: xcodegen generate
+
+      - name: Sélectionner Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+
+      - name: Archiver (sans signature)
+        run: |
+          xcodebuild archive \
+            -project LidarScanner.xcodeproj \
+            -scheme LidarScanner \
+            -sdk iphoneos \
+            -archivePath build/LidarScanner.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO
+
+      - name: Empaqueter en .ipa
+        run: |
+          mkdir -p build/Payload
+          cp -R build/LidarScanner.xcarchive/Products/Applications/LidarScanner.app build/Payload/
+          cd build && zip -r LidarScanner.ipa Payload
+
+      - name: Publier l'artefact .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: LidarScanner-ipa
+          path: build/LidarScanner.ipa
