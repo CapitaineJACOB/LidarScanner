@@ -145,10 +145,27 @@ final class PointCloudRenderer: NSObject, MTKViewDelegate, ARSessionDelegate {
 
         var uniforms = PointCloudUniforms()
         uniforms.localToWorld = frame.camera.transform
-        let intrinsics = frame.camera.intrinsics
-        uniforms.cameraIntrinsicsInversed = intrinsics.inverse
-        uniforms.cameraResolution = SIMD2<Float>(Float(frame.camera.imageResolution.width),
-                                                  Float(frame.camera.imageResolution.height))
+
+        // Les intrinsèques de la caméra sont calibrées pour l'image caméra pleine
+        // résolution, alors que la carte de profondeur LiDAR est bien plus petite.
+        // Il faut donc les mettre à l'échelle de la résolution de la profondeur,
+        // sans quoi chaque point est déprojeté au mauvais endroit (souvent hors
+        // du champ de vision, d'où l'écran noir malgré un compteur qui augmente).
+        let cameraImageResolution = frame.camera.imageResolution
+        let scaleX = Float(width) / Float(cameraImageResolution.width)
+        let scaleY = Float(height) / Float(cameraImageResolution.height)
+        var scaledIntrinsics = frame.camera.intrinsics
+        scaledIntrinsics[0][0] *= scaleX // fx
+        scaledIntrinsics[1][1] *= scaleY // fy
+        scaledIntrinsics[2][0] *= scaleX // cx
+        scaledIntrinsics[2][1] *= scaleY // cy
+        uniforms.cameraIntrinsicsInversed = scaledIntrinsics.inverse
+
+        // Résolution de l'image couleur pleine résolution (pour l'échantillonnage
+        // des textures Y/CbCr dans le mode couleur "Caméra"), distincte de la
+        // résolution de la profondeur utilisée ci-dessus pour les intrinsèques.
+        uniforms.cameraResolution = SIMD2<Float>(Float(cameraImageResolution.width),
+                                                  Float(cameraImageResolution.height))
         uniforms.viewProjectionMatrix = matrix_identity_float4x4
         uniforms.colorMode = 0
         uniforms.highConfidenceOnly = 0
