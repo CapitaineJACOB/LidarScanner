@@ -17,8 +17,8 @@ jobs:
       - name: Générer le projet Xcode
         run: xcodegen generate
 
-      - name: Sélectionner Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+      - name: Afficher la version d'Xcode utilisée
+        run: xcodebuild -version
 
       - name: Archiver (sans signature)
         run: |
