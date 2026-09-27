@@ -17,8 +17,13 @@ jobs:
       - name: Générer le projet Xcode
         run: xcodegen generate
 
-      - name: Afficher la version d'Xcode utilisée
-        run: xcodebuild -version
+      - name: Sélectionner la dernière version d'Xcode disponible
+        run: |
+          ls /Applications | grep Xcode
+          LATEST=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n 1)
+          echo "Utilisation de: $LATEST"
+          sudo xcode-select -s "$LATEST/Contents/Developer"
+          xcodebuild -version
 
       - name: Archiver (sans signature)
         run: |
